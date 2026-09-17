@@ -1,0 +1,239 @@
+--// CONFIGURAÇÕES
+local SLOT_EMOTE = 8 -- Slot 8 da sua roda de emotes
+
+local TEMPO_DANCA = 0.4
+local DISTANCIA_DETECTAR = 1.4
+local DISTANCIA_APOS_PAREDE = 0.3
+
+--// SERVIÇOS
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+--// GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "TeleportEmoteGui"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = playerGui
+
+--// BOTÃO
+local botao = Instance.new("TextButton")
+botao.Name = "TPButton"
+botao.Size = UDim2.new(0, 30, 0, 30)
+botao.Position = UDim2.new(1, -50, 0, 20)
+botao.BackgroundTransparency = 1
+botao.BorderSizePixel = 0
+botao.Text = "👹"
+botao.TextSize = 20
+botao.TextScaled = false
+botao.TextColor3 = Color3.new(1, 1, 1)
+botao.Visible = true
+botao.Active = true
+botao.AutoButtonColor = false
+botao.Parent = gui
+
+--// ARRASTAR O BOTÃO
+local arrastando = false
+local toqueInicial = nil
+local posicaoInicial = nil
+local toqueDoBotao = nil
+local distanciaMovida = 0
+
+botao.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		toqueDoBotao = input    
+		arrastando = true    
+		toqueInicial = input.Position    
+		posicaoInicial = botao.Position    
+		distanciaMovida = 0
+	end
+end)
+
+UserInputService.TouchMoved:Connect(function(input)
+	if arrastando and input == toqueDoBotao then
+		local delta = input.Position - toqueInicial    
+		distanciaMovida = delta.Magnitude    
+		botao.Position = UDim2.new(    
+			posicaoInicial.X.Scale,    
+			posicaoInicial.X.Offset + delta.X,    
+			posicaoInicial.Y.Scale,    
+			posicaoInicial.Y.Offset + delta.Y    
+		)
+	end
+end)
+
+UserInputService.TouchEnded:Connect(function(input)
+	if input == toqueDoBotao then
+		arrastando = false    
+		toqueDoBotao = nil
+	end
+end)
+
+--// CONTROLE
+local usando = false
+local animacaoAtual = nil
+
+--// OBTER DADOS DO PERSONAGEM
+local function getCharacterData()
+	local char = player.Character
+	if not char then return nil, nil, nil end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	return char, hum, hrp
+end
+
+--// VERIFICA SE ESTÁ PARADO
+local function estaParado()
+	local _, humanoid = getCharacterData()
+	if not humanoid or humanoid.Health <= 0 then
+		return false
+	end
+	return humanoid.MoveDirection.Magnitude < 0.05
+end
+
+--// DETECTA PAREDE ATRÁS
+local function detectarParede()
+	local character, _, root = getCharacterData()
+	if not character or not root or not estaParado() then
+		return nil
+	end
+
+	local direcaoCostas = -root.CFrame.LookVector
+	local parametros = RaycastParams.new()
+	parametros.FilterType = Enum.RaycastFilterType.Exclude
+	parametros.FilterDescendantsInstances = {character}
+	parametros.IgnoreWater = true
+
+	return workspace:Raycast(root.Position, direcaoCostas * DISTANCIA_DETECTAR, parametros)
+end
+
+--// PARA A DANÇA
+local function pararDanca()
+	if animacaoAtual then
+		pcall(function() animacaoAtual:Stop(0) end)
+		animacaoAtual = nil
+	end
+
+	local _, humanoid = getCharacterData()
+	if humanoid then
+		for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
+			if track.Priority == Enum.AnimationPriority.Action then
+				pcall(function() track:Stop(0) end)
+			end
+		end
+	end
+end
+
+--// TOCA A DANÇA DO SLOT 8
+local function tocarDanca()
+	local _, humanoid = getCharacterData()
+	if not humanoid or humanoid.Health <= 0 then return false end
+
+	-- Procura pelo nome do emote no slot 8 do avatar
+	local desc = humanoid:GetAppliedDescription()
+	local ordemEmotes = desc:GetEquippedEmotes()
+	local nomeEmote = nil
+
+	for _, info in ipairs(ordemEmotes) do
+		if info.Slot == SLOT_EMOTE then
+			nomeEmote = info.Name
+			break
+		end
+	end
+
+	-- Executa pelo nome ou direto pelo slot
+	local sucesso = false
+	if nomeEmote then
+		sucesso = pcall(function()
+			humanoid:PlayEmote(nomeEmote)
+		end)
+	end
+
+	if not sucesso then
+		sucesso = pcall(function()
+			humanoid:PlayEmoteBySlot(SLOT_EMOTE)
+		end)
+	end
+
+	task.wait(0.1)
+	for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
+		if track.IsPlaying then
+			animacaoAtual = track
+			break
+		end
+	end
+
+	return sucesso
+end
+
+--// TELEPORTE
+local function atravessarParede(resultado)
+	local character, _, root = getCharacterData()
+	if not resultado or not character or not root or not estaParado() then
+		return false
+	end
+
+	local direcaoCostas = -root.CFrame.LookVector
+	local pontoParede = resultado.Position
+	local tamanho = character:GetExtentsSize()
+	local distanciaPersonagem = tamanho.Z / 2
+
+	local novaPosicao = pontoParede + direcaoCostas * (distanciaPersonagem + DISTANCIA_APOS_PAREDE)
+	local rotacao = root.CFrame - root.Position
+
+	character:PivotTo(CFrame.new(novaPosicao) * rotacao)
+	return true
+end
+
+--// AÇÃO DO BOTÃO
+botao.Activated:Connect(function()
+	if distanciaMovida > 10 or usando or not estaParado() then
+		distanciaMovida = 0
+		return
+	end
+
+	local parede = detectarParede()
+	if not parede then return end
+
+	usando = true
+	botao.Active = false
+
+	-- 👹 MUDA PARA 💃
+	botao.Text = "💃"
+
+	tocarDanca()
+
+	local tempoInicio = tick()
+
+	while tick() - tempoInicio < TEMPO_DANCA do
+		if not estaParado() then    
+			pararDanca()    
+			botao.Text = "👹"    
+			botao.Active = true    
+			usando = false    
+			distanciaMovida = 0    
+			return    
+		end    
+		task.wait(0.03)
+	end
+
+	if not estaParado() then
+		pararDanca()    
+		botao.Text = "👹"    
+		botao.Active = true    
+		usando = false    
+		distanciaMovida = 0    
+		return
+	end
+
+	atravessarParede(parede)
+	pararDanca()
+
+	botao.Text = "👹"
+	botao.Active = true
+	usando = false
+	distanciaMovida = 0
+end)
